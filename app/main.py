@@ -32,7 +32,11 @@ origins = [
     "http://localhost:5173",  # React + Vite default dev port
     "http://127.0.0.1:3000",
     "http://127.0.0.1:5173",
+    "https://claim-shield-ai-frontend.vercel.app"
 ]
+
+if settings.FRONTEND_URL not in origins:
+    origins.append(settings.FRONTEND_URL)
 
 app.add_middleware(
     CORSMiddleware,

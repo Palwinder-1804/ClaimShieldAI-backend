@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: Optional[str] = None
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/auth/google/callback"
 
+    # Frontend URL & Cookie Settings
+    FRONTEND_URL: str = "http://localhost:5173"
+    COOKIE_SECURE: bool = False
+    COOKIE_SAMESITE: str = "lax"
+
     # Email Configuration (fastapi-mail SMTP)
     MAIL_USERNAME: Optional[str] = None
     MAIL_PASSWORD: Optional[str] = None

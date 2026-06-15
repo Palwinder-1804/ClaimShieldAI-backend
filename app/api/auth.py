@@ -156,8 +156,11 @@ async def login(
         )
 
     # Generate session & token
-    session_id = await session_service.create_session(str(user.id))
-    access_token = create_access_token(data={"sub": str(user.id)})
+    # Calculate cookie/session max ages (Remember Me -> 30 days)
+    access_token_max_age = 2592000 if credentials.remember_me else 3600
+    session_id_max_age = 2592000 if credentials.remember_me else 86400
+
+    session_id = await session_service.create_session(str(user.id), ttl_seconds=session_id_max_age)
     
     if not session_id:
         raise HTTPException(
@@ -165,23 +168,28 @@ async def login(
             detail="Could not establish session storage. Please try again."
         )
 
+    access_token = create_access_token(
+        data={"sub": str(user.id)},
+        expires_delta=timedelta(seconds=access_token_max_age)
+    )
+
     # Set cookies
     response.set_cookie(
         key="access_token",
         value=access_token,
         httponly=True,
-        max_age=3600,  # 1 hour
-        samesite="lax",
-        secure=False  # True in production behind HTTPS
+        max_age=access_token_max_age,
+        samesite=settings.COOKIE_SAMESITE,
+        secure=settings.COOKIE_SECURE
     )
     
     response.set_cookie(
         key="session_id",
         value=session_id,
         httponly=True,
-        max_age=86400,  # 24 hours
-        samesite="lax",
-        secure=False
+        max_age=session_id_max_age,
+        samesite=settings.COOKIE_SAMESITE,
+        secure=settings.COOKIE_SECURE
     )
 
     log_audit_action(
@@ -268,8 +276,9 @@ async def google_callback(request: Request, response: Response, code: str, db: A
         action = "google_user_logged_in"
 
     # Establish session
-    session_id = await session_service.create_session(str(user.id))
-    access_token = create_access_token(data={"sub": str(user.id)})
+    # For Google OAuth logins, we implicitly remember the user with a 30-day session
+    google_max_age = 2592000
+    session_id = await session_service.create_session(str(user.id), ttl_seconds=google_max_age)
     
     if not session_id:
         raise HTTPException(
@@ -277,8 +286,13 @@ async def google_callback(request: Request, response: Response, code: str, db: A
             detail="Could not establish session storage."
         )
 
-    # Redirect target
-    frontend_redirect = "http://localhost:5173/dashboard" if user.is_onboarded else "http://localhost:5173/onboarding"
+    access_token = create_access_token(
+        data={"sub": str(user.id)},
+        expires_delta=timedelta(seconds=google_max_age)
+    )
+
+    # Redirect target (dynamically resolved using settings.FRONTEND_URL)
+    frontend_redirect = f"{settings.FRONTEND_URL}/dashboard" if user.is_onboarded else f"{settings.FRONTEND_URL}/onboarding"
     redirect_response = RedirectResponse(url=frontend_redirect)
 
     # Set cookies on redirect response
@@ -286,18 +300,18 @@ async def google_callback(request: Request, response: Response, code: str, db: A
         key="access_token",
         value=access_token,
         httponly=True,
-        max_age=3600,
-        samesite="lax",
-        secure=False
+        max_age=google_max_age,
+        samesite=settings.COOKIE_SAMESITE,
+        secure=settings.COOKIE_SECURE
     )
     
     redirect_response.set_cookie(
         key="session_id",
         value=session_id,
         httponly=True,
-        max_age=86400,
-        samesite="lax",
-        secure=False
+        max_age=google_max_age,
+        samesite=settings.COOKIE_SAMESITE,
+        secure=settings.COOKIE_SECURE
     )
 
     log_audit_action(
