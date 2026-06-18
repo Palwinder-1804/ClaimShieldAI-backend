@@ -83,43 +83,37 @@ async def register(request: Request, user_in: UserRegister, db: AsyncSession = D
     return {"detail": "Registration successful. Please check your email for the verification link."}
 
 
-@router.get("/verify", response_model=MessageResponse)
+@router.get("/verify")
 async def verify_email(token: str, db: AsyncSession = Depends(get_db)):
     """
-    Verifies the user's email using the registration token.
+    Verifies the user's email using the registration token and redirects to the login page.
     """
-    payload = decode_access_token(token)
-    if not payload or payload.get("purpose") != "email_verification":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid or expired verification token."
-        )
-    
-    user_id_str = payload.get("sub")
-    import uuid
     try:
-        user_uuid = uuid.UUID(user_id_str)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Malformed verification token payload."
-        )
+        payload = decode_access_token(token)
+        if not payload or payload.get("purpose") != "email_verification":
+            return RedirectResponse(url=f"{settings.FRONTEND_URL}/login?verified=error&reason=invalid_token")
+        
+        user_id_str = payload.get("sub")
+        import uuid
+        try:
+            user_uuid = uuid.UUID(user_id_str)
+        except ValueError:
+            return RedirectResponse(url=f"{settings.FRONTEND_URL}/login?verified=error&reason=invalid_token")
 
-    result = await db.execute(select(User).where(User.id == user_uuid))
-    user = result.scalars().first()
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found."
-        )
+        result = await db.execute(select(User).where(User.id == user_uuid))
+        user = result.scalars().first()
+        if not user:
+            return RedirectResponse(url=f"{settings.FRONTEND_URL}/login?verified=error&reason=user_not_found")
 
-    if user.is_verified:
-        return {"detail": "Email already verified."}
+        if user.is_verified:
+            return RedirectResponse(url=f"{settings.FRONTEND_URL}/login?verified=already")
 
-    user.is_verified = True
-    await db.commit()
+        user.is_verified = True
+        await db.commit()
 
-    return {"detail": "Email verified successfully. You can now log in."}
+        return RedirectResponse(url=f"{settings.FRONTEND_URL}/login?verified=success")
+    except Exception as e:
+        return RedirectResponse(url=f"{settings.FRONTEND_URL}/login?verified=error&reason=unknown")
 
 
 @router.post("/login", response_model=UserResponse)
