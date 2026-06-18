@@ -19,6 +19,7 @@ class ClaimState(TypedDict):
     claim_type: str               # Selected category (health, motor, life, property)
     extracted_text: str           # Raw extracted text
     masked_text: str              # PII-anonymized text
+    policy_id: str                # Matched Policy Document ID
     policy_clauses: List[dict]    # RAG policy matches
     claim_analysis: dict          # Coverage assessment
     company_trust_status: dict    # RAG company trust registry status
@@ -65,6 +66,7 @@ class ClaimPipeline:
             "claim_type": claim_type,
             "extracted_text": "",
             "masked_text": "",
+            "policy_id": "",
             "policy_clauses": [],
             "claim_analysis": {},
             "company_trust_status": {},

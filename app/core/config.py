@@ -1,6 +1,6 @@
 import os
 from typing import Optional
-from pydantic import AnyHttpUrl, EmailStr, field_validator
+from pydantic import AnyHttpUrl, EmailStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -34,12 +34,22 @@ class Settings(BaseSettings):
     # Google OAuth2 Credentials
     GOOGLE_CLIENT_ID: Optional[str] = None
     GOOGLE_CLIENT_SECRET: Optional[str] = None
-    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/auth/google/callback"
+    BACKEND_URL: str = "http://localhost:8000"
+    GOOGLE_REDIRECT_URI: Optional[str] = None
 
     # Frontend URL & Cookie Settings
     FRONTEND_URL: str = "http://localhost:5173"
     COOKIE_SECURE: bool = False
     COOKIE_SAMESITE: str = "lax"
+
+    @model_validator(mode="after")
+    def set_google_redirect_uri(self) -> 'Settings':
+        self.BACKEND_URL = self.BACKEND_URL.rstrip('/')
+        if not self.GOOGLE_REDIRECT_URI:
+            self.GOOGLE_REDIRECT_URI = f"{self.BACKEND_URL}/auth/google/callback"
+        else:
+            self.GOOGLE_REDIRECT_URI = self.GOOGLE_REDIRECT_URI.rstrip('/')
+        return self
 
     # Email Configuration (fastapi-mail SMTP)
     MAIL_USERNAME: Optional[str] = None
@@ -73,4 +83,8 @@ class Settings(BaseSettings):
     # MLflow Tracking
     MLFLOW_TRACKING_URI: str = "http://localhost:5000"
 
+    # OpenTelemetry
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = "http://localhost:4317"
+
 settings = Settings()
+

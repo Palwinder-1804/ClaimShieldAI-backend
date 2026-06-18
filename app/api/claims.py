@@ -1,8 +1,10 @@
 import os
 import uuid
 import logging
+import asyncio
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile, File, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from slowapi import Limiter
@@ -228,6 +230,59 @@ async def get_claim_status(
         "status": claim.status,
         "decision": claim.decision
     }
+
+
+@router.get("/download/{file_path:path}")
+async def download_claim_document(
+    file_path: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Downloads a claim document from MinIO/S3 storage or local fallback.
+    """
+    # Security: users can only download their own documents; admins can download any
+    if user.role != "admin" and not file_path.startswith(f"user_{user.id}/"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permission denied to access this document."
+        )
+
+    from app.services.ocr_service import minio_client
+    bucket = settings.MINIO_BUCKET_NAME
+
+    if minio_client:
+        try:
+            # Fetch object from MinIO/R2
+            def get_data():
+                response = minio_client.get_object(bucket, file_path)
+                return response
+
+            response = await asyncio.to_thread(get_data)
+            content_type = response.headers.get("content-type") or "application/octet-stream"
+            
+            return StreamingResponse(
+                content=response,
+                media_type=content_type,
+                headers={"Content-Disposition": f"attachment; filename={os.path.basename(file_path)}"}
+            )
+        except Exception as e:
+            logger.error(f"Failed to fetch file from MinIO: {e}")
+
+    # Fallback: check if stored locally in data folder
+    local_path = os.path.join("./data", bucket, file_path)
+    if os.path.exists(local_path):
+        from fastapi.responses import FileResponse
+        return FileResponse(
+            path=local_path,
+            filename=os.path.basename(file_path)
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Document file not found."
+    )
+
 
 
 @router.delete("/{claim_id}", response_model=dict)

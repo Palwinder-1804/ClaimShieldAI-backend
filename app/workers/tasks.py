@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import httpx
 import uuid
 from sqlalchemy.future import select
 from celery.exceptions import MaxRetriesExceededError
@@ -9,11 +8,10 @@ from app.workers.celery_app import celery_app
 from app.db.session import AsyncSessionLocal
 from app.db.models import Claim, AuditLog
 from app.orchestrator.graph import ClaimPipeline
+from app.core.config import settings
+from app.services.email_service import email_service
 
 logger = logging.getLogger(__name__)
-
-# Webhook for dead letter alerts (n8n integration)
-N8N_DEAD_LETTER_WEBHOOK = "http://localhost:5678/webhook/claimshield-dead-letter"
 
 def run_async(coro):
     """
@@ -89,6 +87,7 @@ async def process_claim_core(claim_id: uuid.UUID) -> None:
         claim.report = final_state.get("report", "")
         # Store policy clauses as policy_match JSON
         claim.policy_match = {
+            "policy_id": final_state.get("policy_id", ""),
             "matched_clauses_count": len(final_state.get("policy_clauses", [])),
             "clauses": final_state.get("policy_clauses", []),
             "claim_analysis": final_state.get("claim_analysis", {})
@@ -110,10 +109,15 @@ async def process_claim_core(claim_id: uuid.UUID) -> None:
 
 async def handle_permanent_failure(claim_id: uuid.UUID, error_message: str) -> None:
     """
-    Updates the claim status to 'failed' and notifies administrators via n8n webhook.
+    Updates the claim status to 'failed' and notifies administrators & users via SMTP email.
     """
     async with AsyncSessionLocal() as db:
-        result = await db.execute(select(Claim).where(Claim.id == claim_id))
+        from sqlalchemy.orm import selectinload
+        result = await db.execute(
+            select(Claim)
+            .options(selectinload(Claim.user))
+            .where(Claim.id == claim_id)
+        )
         claim = result.scalars().first()
         if claim:
             claim.status = "failed"
@@ -128,24 +132,20 @@ async def handle_permanent_failure(claim_id: uuid.UUID, error_message: str) -> N
             )
             db.add(audit)
             await db.commit()
-
-    # Trigger alert on n8n
-    payload = {
-        "event": "claim_failed_dlq",
-        "claim_id": str(claim_id),
-        "error": error_message,
-        "details": "Claim exceeded 3 retry attempts and has been quarantined."
-    }
-    
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(N8N_DEAD_LETTER_WEBHOOK, json=payload, timeout=5.0)
-            if response.status_code == 200:
-                logger.info("Successfully pushed DLQ alert to n8n.")
-            else:
-                logger.warning(f"n8n webhook returned non-200 code: {response.status_code}")
-        except Exception as e:
-            logger.warning(f"Could not reach n8n webhook endpoint for dead letter alerts: {e}")
+            
+            # Send email to the user who filed the claim
+            if claim.user and claim.user.email:
+                await email_service.send_claim_failure_email(
+                    email_to=claim.user.email,
+                    claim_id=str(claim_id),
+                    error_message=error_message
+                )
+            
+            # Send critical alert alert to system administrator
+            await email_service.send_admin_failure_alert(
+                claim_id=str(claim_id),
+                error_message=error_message
+            )
 
 
 async def process_claim_locally(claim_id: uuid.UUID) -> None:

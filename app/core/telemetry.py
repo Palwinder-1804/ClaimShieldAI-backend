@@ -27,11 +27,12 @@ except Exception as e:
 # We can also add OTLP Exporters (e.g., to Jaeger, collector) if needed
 try:
     from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+    from app.core.config import settings
     # Points to Prometheus/Grafana agent, or otel collector default port 4317
-    otlp_exporter = OTLPSpanExporter(endpoint="http://localhost:4317", insecure=True)
+    otlp_exporter = OTLPSpanExporter(endpoint=settings.OTEL_EXPORTER_OTLP_ENDPOINT, insecure=True)
     otlp_processor = BatchSpanProcessor(otlp_exporter)
     provider.add_span_processor(otlp_processor)
-    logger.info("OTLP Trace exporter successfully registered.")
+    logger.info(f"OTLP Trace exporter registered successfully to endpoint: {settings.OTEL_EXPORTER_OTLP_ENDPOINT}")
 except ImportError:
     logger.info("OTLP Exporter package not installed, skipping GRPC trace exporter.")
 except Exception as e:

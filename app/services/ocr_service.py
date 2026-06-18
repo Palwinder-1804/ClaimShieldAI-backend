@@ -43,25 +43,48 @@ class OCRService:
     def _ensure_bucket(self) -> None:
         """
         Creates the document bucket in MinIO if it does not already exist.
+        Falls back to local MinIO (localhost:9000) if the primary endpoint is unreachable.
         """
+        global minio_client
         if minio_client:
             try:
                 if not minio_client.bucket_exists(self.bucket):
                     minio_client.make_bucket(self.bucket)
                     logger.info(f"Created MinIO bucket: '{self.bucket}'")
             except Exception as e:
-                logger.error(f"Failed to verify/create MinIO bucket: {e}")
+                logger.error(f"Failed to verify/create MinIO bucket on primary endpoint ({settings.MINIO_ENDPOINT}): {e}")
+                if settings.MINIO_ENDPOINT != "localhost:9000":
+                    logger.warning("Attempting fallback to local MinIO (localhost:9000)...")
+                    try:
+                        fallback_client = Minio(
+                            "localhost:9000",
+                            access_key="minioadmin",
+                            secret_key="minioadmin",
+                            secure=False
+                        )
+                        if fallback_client.bucket_exists(self.bucket) or True:
+                            minio_client = fallback_client
+                            if not minio_client.bucket_exists(self.bucket):
+                                minio_client.make_bucket(self.bucket)
+                            logger.info("Successfully connected to fallback local MinIO.")
+                            return
+                    except Exception as fallback_err:
+                        logger.error(f"Local MinIO fallback also failed: {fallback_err}")
+                
+                logger.warning("MinIO unavailable. Operations will fall back to local disk storage.")
+                minio_client = None
 
     async def upload_document(self, object_name: str, file_data: bytes, content_type: str) -> str:
         """
         Uploads document bytes to MinIO (or saves locally if MinIO is offline).
         Returns the object name/path.
         """
+        global minio_client
         if minio_client:
             try:
-                # Setup encrypted uploads if requested
+                # Setup encrypted uploads if requested (only encrypt if using secure R2/S3, not local)
                 headers = {}
-                if settings.MINIO_ENCRYPT:
+                if settings.MINIO_ENCRYPT and settings.MINIO_ENDPOINT != "localhost:9000":
                     headers = {"x-amz-server-side-encryption": "AES256"}
                 
                 stream = io.BytesIO(file_data)
@@ -77,7 +100,35 @@ class OCRService:
                 logger.info(f"Successfully uploaded {object_name} to MinIO bucket {self.bucket}.")
                 return object_name
             except Exception as e:
-                logger.error(f"MinIO upload failed: {e}. Saving locally.")
+                logger.error(f"MinIO upload failed on primary endpoint: {e}.")
+                if settings.MINIO_ENDPOINT != "localhost:9000":
+                    logger.warning("Attempting upload fallback to local MinIO (localhost:9000)...")
+                    try:
+                        fallback_client = Minio(
+                            "localhost:9000",
+                            access_key="minioadmin",
+                            secret_key="minioadmin",
+                            secure=False
+                        )
+                        if not fallback_client.bucket_exists(self.bucket):
+                            fallback_client.make_bucket(self.bucket)
+                        
+                        stream = io.BytesIO(file_data)
+                        await asyncio.to_thread(
+                            fallback_client.put_object,
+                            bucket_name=self.bucket,
+                            object_name=object_name,
+                            data=stream,
+                            length=len(file_data),
+                            content_type=content_type
+                        )
+                        minio_client = fallback_client
+                        logger.info(f"Successfully uploaded {object_name} to fallback local MinIO.")
+                        return object_name
+                    except Exception as fallback_err:
+                        logger.error(f"Local MinIO fallback upload also failed: {fallback_err}")
+                
+                minio_client = None
 
         # Local fallback directory
         fallback_dir = os.path.join("./data", self.bucket)
@@ -97,6 +148,7 @@ class OCRService:
         Downloads a document from MinIO (or reads local fallback) and extracts
         all textual content using PyPDF or GPT-4o Vision OCR.
         """
+        global minio_client
         file_bytes = None
         
         # 1. Retrieve file bytes
@@ -110,7 +162,30 @@ class OCRService:
                     return data
                 file_bytes = await asyncio.to_thread(fetch_minio)
             except Exception as e:
-                logger.error(f"MinIO get_object failed for {object_name}: {e}. Trying local fallback...")
+                logger.error(f"MinIO get_object failed: {e}. Trying fallback...")
+                if settings.MINIO_ENDPOINT != "localhost:9000":
+                    logger.warning("Attempting fetch fallback from local MinIO (localhost:9000)...")
+                    try:
+                        fallback_client = Minio(
+                            "localhost:9000",
+                            access_key="minioadmin",
+                            secret_key="minioadmin",
+                            secure=False
+                        )
+                        def fetch_fallback():
+                            response = fallback_client.get_object(self.bucket, object_name)
+                            data = response.read()
+                            response.close()
+                            response.release_conn()
+                            return data
+                        file_bytes = await asyncio.to_thread(fetch_fallback)
+                        minio_client = fallback_client
+                        logger.info("Successfully fetched document from fallback local MinIO.")
+                    except Exception as fallback_err:
+                        logger.error(f"Local MinIO fallback fetch also failed: {fallback_err}")
+                        minio_client = None
+                else:
+                    minio_client = None
 
         if not file_bytes:
             # Try loading from local fallback

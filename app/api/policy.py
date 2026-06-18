@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.core.dependencies import get_db, get_admin_user, get_current_user
-from app.db.models import PolicyDocument, User
+from app.db.models import PolicyDocument, PolicyChatSession, User
 from app.schemas.claim import PolicyDocumentResponse
 from app.services.ocr_service import ocr_service
 from app.rag.chunker import document_chunker
@@ -122,11 +122,20 @@ async def get_policy_claiming_steps(
     """
     result = await db.execute(select(PolicyDocument).where(PolicyDocument.id == policy_id))
     policy = result.scalars().first()
-    if not policy:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Policy document not found."
-        )
+    
+    policy_name = ""
+    if policy:
+        policy_name = policy.name
+    else:
+        # Fallback to PolicyChatSession for user-uploaded chat policies
+        chat_result = await db.execute(select(PolicyChatSession).where(PolicyChatSession.id == policy_id))
+        chat_session = chat_result.scalars().first()
+        if not chat_session:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Policy document or chat session not found."
+            )
+        policy_name = chat_session.uploaded_filename
 
     # Query hybrid RAG retriever for claim filing steps
     query = "claim submission procedure steps how to file a claim requirements deadlines"
@@ -139,7 +148,7 @@ async def get_policy_claiming_steps(
     if not matched_clauses:
         return {
             "policy_id": policy_id,
-            "policy_name": policy.name,
+            "policy_name": policy_name,
             "steps": "No explicit claiming steps found in this policy document."
         }
 
@@ -163,6 +172,6 @@ async def get_policy_claiming_steps(
 
     return {
         "policy_id": policy_id,
-        "policy_name": policy.name,
+        "policy_name": policy_name,
         "steps": claiming_steps.strip()
     }

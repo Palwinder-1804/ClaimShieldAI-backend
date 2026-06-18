@@ -46,10 +46,42 @@ async def policy_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             logger.error(f"LLM keyword extraction failed: {e}. Falling back to default slicing.")
             keywords_query = " ".join(masked_text.split()[:20])
             
+        # Resolve target policy_id
+        target_policy_id = None
+        from app.db.models import PolicyDocument
+        from app.db.session import AsyncSessionLocal
+        
+        try:
+            async with AsyncSessionLocal() as session:
+                res_policy = await session.execute(select(PolicyDocument).limit(1))
+                db_policy = res_policy.scalars().first()
+                if db_policy:
+                    target_policy_id = str(db_policy.id)
+        except Exception as db_err:
+            logger.error(f"Error accessing DB for target policy: {db_err}")
+
+        # If not in DB, scroll fallback
+        if not target_policy_id:
+            try:
+                from app.rag.vector_store import vector_store_manager
+                import asyncio
+                res_points, _ = await asyncio.to_thread(
+                    vector_store_manager.client.scroll,
+                    collection_name=vector_store_manager.collection_name,
+                    limit=20,
+                    with_payload=True,
+                    with_vectors=False
+                )
+                policy_ids = list(set(point.payload.get("policy_id") for point in res_points if point.payload and "policy_id" in point.payload))
+                if policy_ids:
+                    target_policy_id = policy_ids[0]
+            except Exception as qdrant_err:
+                logger.error(f"Error scrolling Qdrant for fallback policy_ids: {qdrant_err}")
+
         # 2. Query hybrid FAISS + BM25 retriever
         try:
-            matched_clauses = await policy_retriever.retrieve_clauses(keywords_query)
-            logger.info(f"Retrieved {len(matched_clauses)} matching policy clauses.")
+            matched_clauses = await policy_retriever.retrieve_clauses(keywords_query, policy_id=target_policy_id)
+            logger.info(f"Retrieved {len(matched_clauses)} matching policy clauses for policy_id: {target_policy_id}")
         except Exception as e:
             logger.error(f"RAG retrieval failed: {e}")
             matched_clauses = []
@@ -159,6 +191,7 @@ async def policy_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             logger.error(f"Error compiling company trust/history: {e}")
             
         return {
+            "policy_id": target_policy_id or "",
             "policy_clauses": matched_clauses,
             "company_trust_status": company_trust_status,
             "company_claim_history": company_claim_history

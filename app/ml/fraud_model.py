@@ -95,19 +95,34 @@ class FraudDetector:
         # Log details to MLflow if running
         try:
             import mlflow
-            # Ensure MLflow is configured
-            mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000"))
+            from app.core.config import settings
+            
+            tracking_uri = settings.MLFLOW_TRACKING_URI
+            mlflow.set_tracking_uri(tracking_uri)
             mlflow.set_experiment("claimshield-fraud-experiment")
             
-            with mlflow.start_run(run_name=f"claim-{claim_id}" if claim_id else None, nested=True):
-                # Log inputs
-                for f_name, f_val in zip(FEATURE_NAMES, feature_vals):
-                    mlflow.log_param(f"feature_{f_name}", f_val)
-                # Log outputs
-                mlflow.log_metric("fraud_score", fraud_score)
-                mlflow.log_metric("xgb_prob", xgb_prob)
-                mlflow.log_metric("iso_flag", iso_flag)
-                logger.info(f"Logged prediction for claim {claim_id} to MLflow.")
+            run = None
+            try:
+                run = mlflow.start_run(run_name=f"claim-{claim_id}" if claim_id else None, nested=True)
+            except Exception as conn_err:
+                # If primary tracking URI failed and it wasn't already localhost, fallback to localhost
+                if tracking_uri != "http://localhost:5000":
+                    logger.warning(f"Could not connect to MLflow server at {tracking_uri}: {conn_err}. Falling back to localhost:5000...")
+                    mlflow.set_tracking_uri("http://localhost:5000")
+                    run = mlflow.start_run(run_name=f"claim-{claim_id}" if claim_id else None, nested=True)
+                else:
+                    raise conn_err
+            
+            if run:
+                with run:
+                    # Log inputs
+                    for f_name, f_val in zip(FEATURE_NAMES, feature_vals):
+                        mlflow.log_param(f"feature_{f_name}", f_val)
+                    # Log outputs
+                    mlflow.log_metric("fraud_score", fraud_score)
+                    mlflow.log_metric("xgb_prob", xgb_prob)
+                    mlflow.log_metric("iso_flag", iso_flag)
+                    logger.info(f"Logged prediction for claim {claim_id} to MLflow.")
         except Exception as e:
             # Fail silently to avoid breaking the core pipeline when MLflow is not running
             logger.debug(f"MLflow logging bypassed: {e}")
