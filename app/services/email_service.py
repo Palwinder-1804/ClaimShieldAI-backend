@@ -144,4 +144,50 @@ class EmailService:
         except Exception as e:
             logger.error(f"Failed to send admin failure alert email to {admin_email}: {e}")
 
+    @staticmethod
+    async def send_feedback_email(claim_id: str, rating: int, agreed: bool, comment: str, submitter_email: str) -> None:
+        """
+        Sends claim validation feedback details to the ClaimShield AI Admin.
+        """
+        admin_email = settings.MAIL_FROM or settings.MAIL_USERNAME or "palwinder1874singh@gmail.com"
+        agreement_text = "Agreed with system decision" if agreed else "Disagreed with system decision"
+        stars = "★" * rating + "☆" * (5 - rating)
+        
+        html_content = f"""
+        <html>
+            <body>
+                <h2>Claim Validation Feedback Received</h2>
+                <p>Hello Admin,</p>
+                <p>New validation feedback has been submitted for a claim decision audit.</p>
+                <p><strong>Claim ID:</strong> {claim_id}</p>
+                <p><strong>Submitted By (User):</strong> {submitter_email}</p>
+                <p><strong>Agreement status:</strong> {agreement_text}</p>
+                <p><strong>System Rating:</strong> {stars} ({rating}/5)</p>
+                {"<p><strong>Comments:</strong> " + comment + "</p>" if comment else ""}
+                <p>Best regards,<br/>ClaimShield AI Monitoring</p>
+            </body>
+        </html>
+        """
+        
+        message = MessageSchema(
+            subject=f"Claim Feedback Submission Alert: Claim {claim_id}",
+            recipients=[admin_email],
+            body=html_content,
+            subtype=MessageType.html
+        )
+        
+        if not settings.MAIL_USERNAME or "smtp-username" in settings.MAIL_USERNAME:
+            logger.info("==========================================================")
+            logger.info(f"DEVELOPMENT MODE: Validation feedback email generated for Admin: {admin_email}")
+            logger.info(f"Claim ID: {claim_id} | Submitter: {submitter_email} | Rating: {rating} | Agreed: {agreed}")
+            logger.info("==========================================================")
+            return
+
+        try:
+            fm = FastMail(conf)
+            await fm.send_message(message)
+            logger.info(f"Validation feedback email successfully sent to Admin: {admin_email}")
+        except Exception as e:
+            logger.error(f"Failed to send validation feedback email to Admin: {admin_email}: {e}")
+
 email_service = EmailService()

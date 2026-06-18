@@ -81,4 +81,17 @@ async def submit_claim_feedback(
     await db.commit()
     logger.info(f"Feedback successfully saved for Claim {claim_id}")
     
+    # Send validation feedback email
+    from app.services.email_service import email_service
+    try:
+        await email_service.send_feedback_email(
+            claim_id=str(claim_id),
+            rating=feedback_in.rating,
+            agreed=feedback_in.agreed_with_decision,
+            comment=feedback_in.comment,
+            submitter_email=user.email
+        )
+    except Exception as email_err:
+        logger.error(f"Error sending validation feedback email: {email_err}")
+    
     return new_feedback
